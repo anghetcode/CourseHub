@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-
+from app import schemas
 from fastapi import FastAPI, HTTPException, Query, Response, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -218,3 +218,129 @@ def delete_enrollment(student_id: str, class_section_id: str) -> Response:
                 detail="Khong tim thay dang ky can huy",
             )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+from sqlalchemy import text # Đảm bảo đã import text ở đầu file
+
+@app.get("/lecturers", response_model=list[schemas.Lecturer])
+def get_lecturers():
+    sql = """
+        SELECT id, name
+        FROM lecturers
+        ORDER BY id;
+    """
+    with engine.connect() as connection:
+        # Dùng .all() vì chúng ta lấy danh sách nhiều giảng viên
+        rows = connection.execute(text(sql)).mappings().all()
+        
+    # Chuyển đổi kết quả thành danh sách các dictionary
+    return [dict(row) for row in rows]
+
+@app.get("/sections/{section_id}", response_model=schemas.SectionDetail)
+def get_section_detail(section_id: str) -> dict[str, object]:
+    sql = """
+        SELECT 
+            cs.id as section_id, 
+            c.id as course_id, 
+            c.name as course_name, 
+            cs.semester_id, 
+            l.name as lecturer_name, 
+            cs.capacity, 
+            COALESCE(v.enrolled, 0) as enrolled, 
+            COALESCE(v.remaining, cs.capacity) as remaining
+        FROM class_sections cs
+        JOIN courses c ON cs.course_id = c.id
+        JOIN lecturers l ON cs.lecturer_id = l.id
+        LEFT JOIN v_section_summary v ON cs.id = v.section_id
+        WHERE cs.id = :section_id
+    """
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(sql),
+            {"section_id": section_id.upper()}
+        ).mappings().first()
+        
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Khong tim thay lop hoc phan",
+        )
+    return dict(row)
+
+@app.patch("/sections/{section_id}/capacity")
+def update_section_capacity(section_id: str, data: schemas.CapacityUpdate) -> dict[str, object]:
+    # Bước 1: Kiểm tra lớp học và lấy số lượng đã đăng ký
+    check_sql = """
+        SELECT cs.capacity, COALESCE(v.enrolled, 0) as enrolled
+        FROM class_sections cs
+        LEFT JOIN v_section_summary v ON cs.id = v.section_id
+        WHERE cs.id = :section_id
+    """
+    with engine.connect() as connection:
+        row = connection.execute(
+            text(check_sql),
+            {"section_id": section_id.upper()}
+        ).mappings().first()
+        
+        if row is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Khong tim thay lop hoc phan",
+            )
+            
+        enrolled = row["enrolled"]
+        
+        # Bước 2: Kiểm tra logic sức chứa mới
+        if data.capacity < enrolled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Suc chua khong duoc nho hon so sinh vien da dang ky",
+            )
+            
+        # Bước 3: Cập nhật database
+        update_sql = """
+            UPDATE class_sections 
+            SET capacity = :capacity 
+            WHERE id = :section_id
+        """
+        connection.execute(
+            text(update_sql),
+            {"capacity": data.capacity, "section_id": section_id.upper()}
+        )
+        connection.commit()  # Bắt buộc phải có commit() khi dùng UPDATE/INSERT
+        
+    return {"message": "Cap nhat thanh cong", "new_capacity": data.capacity}
+
+from fastapi import Query
+
+@app.get("/courses")
+def get_courses(
+    q: str | None = None, 
+    skip: int = Query(0, ge=0), 
+    limit: int = Query(10, ge=1, le=100)
+):
+    with engine.connect() as connection:
+        if q:
+            # Tìm kiếm theo tên hoặc mã môn học
+            sql = """
+                SELECT * FROM courses 
+                WHERE name ILIKE :q OR id ILIKE :q
+                ORDER BY id 
+                OFFSET :skip LIMIT :limit
+            """
+            rows = connection.execute(
+                text(sql), 
+                {"q": f"%{q}%", "skip": skip, "limit": limit}
+            ).mappings().all()
+        else:
+            # Lấy tất cả có phân trang
+            sql = """
+                SELECT * FROM courses 
+                ORDER BY id 
+                OFFSET :skip LIMIT :limit
+            """
+            rows = connection.execute(
+                text(sql), 
+                {"skip": skip, "limit": limit}
+            ).mappings().all()
+            
+    return [dict(row) for row in rows]
