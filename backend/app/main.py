@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from app import schemas
+from . import schemas
 from fastapi import FastAPI, HTTPException, Query, Response, status
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
