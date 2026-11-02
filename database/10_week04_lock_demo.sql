@@ -1,0 +1,2 @@
+-- 10_week04_lock_demo.sql
+-- Demo su dung lock trong PostgreSQL
