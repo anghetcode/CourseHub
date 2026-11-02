@@ -1,0 +1,2 @@
+-- 09_week04_race_condition_unsafe.sql
+-- Demo race condition khong an toan
